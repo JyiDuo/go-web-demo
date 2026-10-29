@@ -1,22 +1,39 @@
 package model
-//1.定义备忘录的数据结构
+import(
+	"gorm.io/gorm"
+	 "gorm.io/driver/sqlite"  
+)
+//定义备忘录的数据结构
 type Memo struct{
-	ID      int    `json:"id"`//序列化成 JSON 时，这个字段的键名用 "id"
+	gorm.Model// gorm.Model 是 GORM 内置的结构体，
+	//包含了 ID(主键)、CreatedAt(创建时间)、UpdatedAt、DeletedAt
+	//GORM会自动帮你生成和管理自增ID
 	Content string `json:"content"`
 }
-//2.一个数据库，用切片来存数据
-var MemoList []Memo
-//3.核心业务逻辑：新增备忘录
-func CreateMemo(content string)Memo{
-	newID:=len(MemoList)+1
-	newMemo:=Memo{
-		ID: newID,
-		Content: content,
+//全局的数据库连接对象（大写开头，方便其他包调用）
+var DB *gorm.DB
+//初始化数据库连接
+func InitDB(){
+	var err error
+	//连接SQLite数据库，如果文件不存在，它会自动在当前目录下创建一个memo.db文件
+	DB, err = gorm.Open(sqlite.Open("memo.db"), &gorm.Config{})
+	if err!=nil{
+		panic("连接数据库失败："+err.Error())
 	}
-	MemoList=append(MemoList, newMemo)
-	return newMemo
+	//自动迁移：让GORM帮我们在数据库里建好对应的表结构
+	DB.AutoMigrate(&Memo{})
 }
-//4.核心业务逻辑：获取所有备忘录
+//新增备忘录
+func CreateMemo(content string)Memo{
+	memo:=Memo{Content: content}
+	//写入数据库
+	DB.Create(&memo)
+	return memo
+}
+//获取所有备忘录
 func GetAllMemos()[]Memo{
-	return MemoList
+	var memos []Memo
+	//查询数据库里所有的备忘录记录，塞进memos切片里
+	DB.Find(&memos)
+	return memos
 }
