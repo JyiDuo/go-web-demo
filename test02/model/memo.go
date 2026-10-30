@@ -1,7 +1,7 @@
 package model
 import(
 	"gorm.io/gorm"
-	 "gorm.io/driver/sqlite"  
+	"github.com/glebarez/sqlite" 
 )
 //定义备忘录的数据结构
 type Memo struct{
@@ -36,4 +36,27 @@ func GetAllMemos()[]Memo{
 	//查询数据库里所有的备忘录记录，塞进memos切片里
 	DB.Find(&memos)
 	return memos
+}
+//修改备忘录里的数据
+func UpdateMemo(id uint,content string)(Memo,error){
+	var memo Memo
+	if err:=DB.First(&memo,id).Error;err!=nil{
+		return memo,err
+	}
+	//找到了将内容替换掉
+	memo.Content=content
+	//保存回数据库
+	DB.Save(&memo)
+	return memo,nil
+}
+//删除备忘录
+func DeleteMemo(id uint)error{
+	//delete方法默认是软删除（只会打个时间戳标记，数据还在硬盘里）
+	//这里我们直接传ID，GORM会去删对应的记录
+	result:=DB.Delete(&Memo{},id)
+	if result.RowsAffected==0{
+		return gorm.ErrRecordNotFound//result.RowsAffected：这次操作影响的行数。
+		//说明一条没有删除，ID 不存在
+	}
+	return result.Error//如果删除时报错了，这里面就是装的错误信息，如果是nil说明顺利执行
 }

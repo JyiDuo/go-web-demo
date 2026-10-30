@@ -13,6 +13,10 @@ func SetRouter()*gin.Engine{
 		memoGroup.GET("",handler.GetMemosHandler)
 		//创建备忘录
 		memoGroup.POST("",handler.CreateMemoandler)
+		//修改备忘录内容
+		memoGroup.PUT("/:id", handler.UpdateMemoHandler)
+		//删除备忘录
+		memoGroup.DELETE("/:id", handler.DeleteMemoHandler)
 	}
 	return r
 }
