@@ -1,15 +1,21 @@
 package main
 
 import (
-	"go-web-demo/test02/router"
+	"fmt"
 	"go-web-demo/test02/model"
+	"go-web-demo/test02/router"
+	"go-web-demo/test02/utils"
 )
 
 func main() {
-	//初始化数据库
 	model.InitDB()
-	//初始化并获取路由
-	r := router.SetRouter()
-	//启动服务
+
+	// 【临时测试代码】生成一个 Token 方便测试
+	testToken, _ := utils.GenerateToken(1)
+	fmt.Println("====== 测试用的 Token ======")
+	fmt.Println(testToken)
+	fmt.Println("============================")
+
+	r := router.SetupRouter()
 	r.Run(":8080")
 }

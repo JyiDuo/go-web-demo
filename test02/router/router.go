@@ -1,22 +1,23 @@
 package router
-import(
+
+import (
 	"go-web-demo/test02/handler"
+	"go-web-demo/test02/middleware" // 引入中间件
 	"github.com/gin-gonic/gin"
 )
-//初始化路由的方法
-func SetRouter()*gin.Engine{
-	r:=gin.Default()
-	//把路由分组。/memos 下面的都归这里管
-	memoGroup:=r.Group("/memos")
+
+func SetupRouter() *gin.Engine {
+	r := gin.Default()
+
+	memoGroup := r.Group("/memos")
+	// 挂载中间件：只有通过 JWTAuth 安检，才能进入下面的路由
+	memoGroup.Use(middleware.JWTAuth()) 
 	{
-		//获取列表
-		memoGroup.GET("",handler.GetMemosHandler)
-		//创建备忘录
-		memoGroup.POST("",handler.CreateMemoandler)
-		//修改备忘录内容
+		memoGroup.GET("", handler.GetMemosHandler)
+		memoGroup.POST("", handler.CreateMemoandler)
 		memoGroup.PUT("/:id", handler.UpdateMemoHandler)
-		//删除备忘录
 		memoGroup.DELETE("/:id", handler.DeleteMemoHandler)
 	}
+
 	return r
 }
