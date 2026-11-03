@@ -9,12 +9,14 @@ import (
 func SetupRouter() *gin.Engine {
 	r := gin.Default()
 
+	// 聊天接口不需要 JWT 鉴权，先让它裸奔跑通
+	r.POST("/chat", handler.ChatHandler)
+
 	memoGroup := r.Group("/memos")
-	// 挂载中间件：只有通过 JWTAuth 安检，才能进入下面的路由
 	memoGroup.Use(middleware.JWTAuth()) 
 	{
 		memoGroup.GET("", handler.GetMemosHandler)
-		memoGroup.POST("", handler.CreateMemoandler)
+		memoGroup.POST("", handler.CreateMemoHandler)
 		memoGroup.PUT("/:id", handler.UpdateMemoHandler)
 		memoGroup.DELETE("/:id", handler.DeleteMemoHandler)
 	}

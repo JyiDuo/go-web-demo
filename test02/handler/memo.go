@@ -10,7 +10,7 @@ type CreateMemoReq struct{
 	Content string `json:"content"`
 }
 //处理POST请求：新增备忘录
-func CreateMemoandler(c*gin.Context){
+func CreateMemoHandler(c*gin.Context){
 	var req CreateMemoReq
 	//1.绑定前端传来的JSON
 	if err:=c.ShouldBindJSON(&req);err!=nil{
