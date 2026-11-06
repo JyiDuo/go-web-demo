@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	"context" // 引入 context
 	"go-web-demo/test02/model"
 	"go-web-demo/test02/router"
 	"go-web-demo/test02/utils"
@@ -9,13 +9,11 @@ import (
 
 func main() {
 	model.InitDB()
-
-	// 【临时测试代码】生成一个 Token 方便测试
-	testToken, _ := utils.GenerateToken(1)
-	fmt.Println("====== 测试用的 Token ======")
-	fmt.Println(testToken)
-	fmt.Println("============================")
-
+	//初始化Eino的大模型
+	ctx:=context.Background()
+	if err:=utils.InitEinoModel(ctx);err!=nil{
+		panic("Eino 模型初始化失败:"+err.Error())
+	}
 	r := router.SetupRouter()
 	r.Run(":8080")
 }
