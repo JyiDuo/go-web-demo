@@ -1,44 +1,89 @@
 package handler
+
 import (
 	"context"
+	"encoding/json" // 新增：用于解析 AI 传回来的 JSON 参数
+	"fmt"
 	"net/http"
+	"go-web-demo/test02/model" // 新增：我们要调用数据库层了
+	"go-web-demo/test02/tools"
 	"go-web-demo/test02/utils"
-	"github.com/cloudwego/eino/schema" // 引入 Eino 的消息结构
+	"github.com/cloudwego/eino/schema"
 	"github.com/gin-gonic/gin"
 )
-type ChatReq struct{
+
+type ChatReq struct {
 	Prompt string `json:"prompt"`
 }
-func ChatHandler(c*gin.Context){
+
+func ChatHandler(c *gin.Context) {
 	var req ChatReq
-	//接收前端传来的问题
-	if err :=c.ShouldBindJSON(&req);err!=nil{
-		c.JSON(http.StatusBadRequest,gin.H{
-			"error":"请求参数错误",
-		})
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
-	//构造上下文并且设置超时时间
-	ctx:=context.Background()
-	//构造消息列表
-	//模拟一下“记忆”：假设用户之前说过“我叫张三”，现在问“我叫什么？”
-	// 在真实业务里，你需要把数据库里的历史聊天记录查出来，转成 []*schema.Message
-	messages:=[]*schema.Message{
-		{Role:schema.User,Content:"我叫张三"},
-		{Role:schema.Assistant,Content:"好的，我记住了，你叫张三"},
-		{Role:schema.User,Content:req.Prompt},//当前用户的问题
+
+	ctx := context.Background()
+	messages := []*schema.Message{
+		{Role: schema.User, Content: req.Prompt},
 	}
-	//调用Eino模型进行问答
-	resp,err:=utils.ChatModel.Generate(ctx,messages)
-	if err!=nil{
-		c.JSON(http.StatusInternalServerError,gin.H{
-			"error":"AI 思考失败:"+err.Error(),
-		})
+
+	// 1. 绑定工具
+	toolsList := tools.GetMemoTools()
+	ChatModelWithTools, err := utils.ChatModel.WithTools(toolsList)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "绑定工具失败"})
 		return
 	}
-	//返回回答给前端
-	c.JSON(http.StatusOK,gin.H{
-		"message":"请求成功",
-		"answer":resp.Content,
+
+	// 2. 第一次调用大模型
+	resp, err := ChatModelWithTools.Generate(ctx, messages)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "AI 思考失败: " + err.Error()})
+		return
+	}
+
+	// 3. 检查 AI 是不是想调用工具
+	if len(resp.ToolCalls) > 0 {
+		toolCall := resp.ToolCalls[0]
+		
+		if toolCall.Function.Name == "create_memo" {
+			// 4. 极其关键：AI 传回来的是 JSON 字符串，我们必须解析它！
+			var params tools.CreateMemoParams
+			if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &params); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "解析 AI 参数失败"})
+				return
+			}
+			
+			// 真正存数据库（用解析出来的 params.Content）
+			memo := model.CreateMemo(params.Content)
+
+			// 5. 把工具执行的结果，追加到消息上下文里
+			messages = append(messages, resp) // 先把 AI 决定调用工具的那条消息加进去
+			messages = append(messages, &schema.Message{
+				Role:       schema.Tool,
+				Content:    fmt.Sprintf("操作成功,备忘录ID为 %d", memo.ID),
+				ToolCallID: toolCall.ID,
+			})
+
+			// 6. 第二次调用大模型，让 AI 总结结果
+			finalResp, err := ChatModelWithTools.Generate(ctx, messages)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "AI 总结失败: " + err.Error()})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"message": "操作成功",
+				"answer":  finalResp.Content,
+			})
+			return
+		}
+	}
+
+	// 如果 AI 没有调用工具（比如用户只是问“你是谁”），直接返回回答
+	c.JSON(http.StatusOK, gin.H{
+		"message": "请求成功",
+		"answer":  resp.Content,
 	})
 }
