@@ -9,6 +9,7 @@ import (
 
 func main() {
 	model.InitDB()
+	model.InitChatHistoryTable()
 	//初始化Eino的大模型
 	ctx:=context.Background()
 	if err:=utils.InitEinoModel(ctx);err!=nil{
