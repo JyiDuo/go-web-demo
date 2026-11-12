@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"go-web-demo/test02/model"
 	"go-web-demo/test02/tools"
@@ -23,36 +24,21 @@ func ChatHandler(c *gin.Context) {
 		return
 	}
 
-	// 假设当前登录用户 ID 为 1
 	userID := uint(1)
-
 	ctx := context.Background()
 
-	// ================= 1. 记忆注入开始 =================
+	// 1. 组装历史记忆
 	messages := []*schema.Message{}
-
-	// 去数据库查最近的 10 条记录
 	history := model.GetRecentChats(userID, 10)
 	for _, chat := range history {
-		// 把数据库里的记录，转换成大模型认识的 Message
 		role := schema.User
 		if chat.Role == "assistant" {
 			role = schema.Assistant
 		}
-		messages = append(messages, &schema.Message{
-			Role:    role,
-			Content: chat.Content,
-		})
+		messages = append(messages, &schema.Message{Role: role, Content: chat.Content})
 	}
+	messages = append(messages, &schema.Message{Role: schema.User, Content: req.Prompt})
 	
-	// 把当前用户问的话，追加到历史记录后面
-	messages = append(messages, &schema.Message{
-		Role:    schema.User,
-		Content: req.Prompt,
-	})
-	// ================= 记忆注入结束 =================
-
-	// 保存用户当前这句话到数据库
 	model.SaveChat(userID, "user", req.Prompt)
 
 	// 2. 绑定工具
@@ -63,57 +49,99 @@ func ChatHandler(c *gin.Context) {
 		return
 	}
 
-	// 3. 第一次调用大模型
-	resp, err := ChatModelWithTools.Generate(ctx, messages)
+	// 3. 设置 SSE 响应头（告诉浏览器，我要持续吐数据了）
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("Transfer-Encoding", "chunked")
+
+	// 4. 第一次调用：流式请求
+	// 注意这里用的是 Stream，而不是之前的 Generate
+	stream, err := ChatModelWithTools.Stream(ctx, messages)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "AI 思考失败: " + err.Error()})
 		return
 	}
+	defer stream.Close() // 极其重要！防止内存泄漏
 
-	// 4. 检查 AI 是不是想调用工具
-	if len(resp.ToolCalls) > 0 {
-		toolCall := resp.ToolCalls[0]
+	// 5. 读取流式返回的数据
+	var fullRespContent string // 用来把 AI 说的话拼接起来，最后存数据库
+	var toolCalls []schema.ToolCall // 如果触发了工具，要在这里收集
+
+	for {
+		chunk, err := stream.Recv() // 每次接收一个小碎片
+		if err != nil {
+			if err == io.EOF { // 读完了
+				break
+			}
+			fmt.Printf("读取流失败: %v\n", err)
+			return
+		}
+
+		// 如果这个碎片里包含文本内容，直接推给前端（实现打字机效果）
+		if chunk.Content != "" {
+			fullRespContent += chunk.Content
+			// SSE 格式要求：data: xxx\n\n
+			c.Writer.WriteString("data: " + chunk.Content + "\n\n")
+			c.Writer.Flush() // 强制把数据推给前端
+		}
+
+		// 如果这个碎片里包含工具调用，先收集起来，等流结束后处理
+		if len(chunk.ToolCalls) > 0 {
+			toolCalls = append(toolCalls, chunk.ToolCalls...)
+		}
+	}
+
+	// 6. 处理工具调用（如果 AI 在流式输出中决定调用工具）
+	if len(toolCalls) > 0 {
+		toolCall := toolCalls[0] // 假设只调用一个工具
 
 		if toolCall.Function.Name == "create_memo" {
 			var params tools.CreateMemoParams
-			if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &params); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "解析 AI 参数失败"})
-				return
-			}
-
+			json.Unmarshal([]byte(toolCall.Function.Arguments), &params)
 			memo := model.CreateMemo(params.Content)
 
-			messages = append(messages, resp) // 先把 AI 决定调工具的消息加进去
+			// 注意：流式模式下，如果决定调工具，前面通常不会吐出字。
+			// 我们需要把上下文补齐，再发第二次请求
+			messages = append(messages, &schema.Message{
+				Role:      schema.Assistant,
+				Content:   "",
+				ToolCalls: []schema.ToolCall{toolCall},
+			})
 			messages = append(messages, &schema.Message{
 				Role:       schema.Tool,
 				Content:    fmt.Sprintf("操作成功，备忘录ID为 %d", memo.ID),
 				ToolCallID: toolCall.ID,
 			})
 
-			// 第二次调用大模型，让 AI 总结结果
-			finalResp, err := ChatModelWithTools.Generate(ctx, messages)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "AI 总结失败: " + err.Error()})
-				return
+			// 第二次流式调用，让 AI 根据工具结果生成最终回答
+			stream2, _ := ChatModelWithTools.Stream(ctx, messages)
+			defer stream2.Close()
+
+			fullRespContent = "" // 清空之前的
+			for {
+				chunk, err := stream2.Recv()
+				if err != nil {
+					if err == io.EOF {
+						break
+					}
+					return
+				}
+				if chunk.Content != "" {
+					fullRespContent += chunk.Content
+					c.Writer.WriteString("data: " + chunk.Content + "\n\n")
+					c.Writer.Flush()
+				}
 			}
-
-			// 保存 AI 的最终总结到数据库
-			model.SaveChat(userID, "assistant", finalResp.Content)
-
-			c.JSON(http.StatusOK, gin.H{
-				"message": "操作成功",
-				"answer":  finalResp.Content,
-			})
-			return
 		}
 	}
 
-	// 如果 AI 没有调用工具，直接回答
-	// 保存 AI 的普通回答到数据库
-	model.SaveChat(userID, "assistant", resp.Content)
+	// 7. 最后把 AI 的回复存入数据库
+	if fullRespContent != "" {
+		model.SaveChat(userID, "assistant", fullRespContent)
+	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"message": "请求成功",
-		"answer":  resp.Content,
-	})
+	// 发送结束标志
+	c.Writer.WriteString("data: [DONE]\n\n")
+	c.Writer.Flush()
 }
